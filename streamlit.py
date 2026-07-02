@@ -43,29 +43,19 @@ def save_tasks_data():
 def calculate_urgency(due_date_str, time_needed_hours):
     """Calculates a timezone-safe, exponential urgency pressure score."""
     try:
-        # 1. Parse the task deadline
         due_datetime = datetime.strptime(due_date_str, "%d-%m-%Y %H:%M")
-        
-        # 2. Get current time (naive comparison matching the strptime format)
         now = datetime.now()
-        
-        # 3. Calculate exact total hours remaining
         time_available = (due_datetime - now).total_seconds() / 3600
 
         # Safety trigger: If deadline passed or work hours exceed time left, max it out
         if time_available <= 0 or time_needed_hours >= time_available:
             return 10.0
 
-        # 4. EXPONENTIAL PRESSURE CURVE
-        # Ratio of your remaining day that this task will consume
+        # Exponential pressure curve calculation
         time_consumption_ratio = time_needed_hours / time_available
-        
-        # We raise the intensity using an exponential factor so that 
-        # when a task takes up a huge chunk of your night, it jumps up aggressively.
         urgency_score = (time_consumption_ratio ** 0.7) * 10
         
         return round(min(10.0, max(0.0, urgency_score)), 2)
-        
     except Exception:
         return 0.0
 
@@ -179,7 +169,8 @@ with st.form("new_task_form", clear_on_submit=True):
 
     with col_right:
         due_day = st.date_input("Target Due Date", value=datetime.now().date())
-        due_time = st.time_input("Target Action Time Deadline", value=datetime.replace(datetime.now(), hour=22, minute=0).time())
+        # Form matches exact current time instead of defaulting to 22:00
+        due_time = st.time_input("Target Action Time Deadline", value=datetime.now().time())
         time_qty = st.number_input("Time investment quantity", min_value=0.1, value=1.0, step=0.5)
         time_unit = st.selectbox("Duration unit metrics type", ["Minutes", "Hours", "Days", "Weeks"], index=1)
 
@@ -229,12 +220,11 @@ if not raw_df.empty:
     plot_df = raw_df[raw_df["completed"] == False].copy() if "completed" in raw_df else raw_df.copy()
     
     if not plot_df.empty:
-        # Side-by-side columns for charts
         graph_col1, graph_col2 = st.columns([1, 1])
         
         with graph_col1:
             st.subheader("🎯 Priority Matrix Mapping")
-            # Force absolute locked scale domain coordinates from [0 to 10]
+            # Force absolute locked scale domains from 0 to 10 to disable automatic chart zooming
             scatter_chart = (
                 alt.Chart(plot_df)
                 .mark_circle(size=140, opacity=0.85)
