@@ -147,8 +147,8 @@ if not raw_df.empty:
                     "value": st.column_config.NumberColumn("Importance (1-10)", min_value=1, max_value=10, step=1),
                     "due_date": st.column_config.TextColumn("Due Date (DD-MM-YYYY HH:MM)"),
                     "time required": st.column_config.NumberColumn("Hours Required", min_value=0.1),
-                    "urgency": st.column_config.NumberColumn("Urgency Score", disabled=True),
-                    "final_score": st.column_config.NumberColumn("Final Combined Score", disabled=True)
+                    "urgency": st.column_config.NumberColumn("Urgency Score", disabled=True, format="%.2f"),
+                    "final_score": st.column_config.NumberColumn("Final Combined Score", disabled=True, format="%.2f")
                 }
             )
             
