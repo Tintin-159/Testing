@@ -12,7 +12,6 @@ import altair as alt
 DEFAULT_CATEGORIES = ["School", "Work", "Personal", "Study"]
 
 def load_tasks_data():
-    """Loads tasks and categories from JSON or initializes them in st.session_state."""
     if "tasks" not in st.session_state or "categories" not in st.session_state:
         try:
             with open("tasks.json", "r") as file:
@@ -28,7 +27,6 @@ def load_tasks_data():
             st.session_state.categories = DEFAULT_CATEGORIES
 
 def save_tasks_data():
-    """Saves current state back to the JSON file safely."""
     temp_file = "tasks.json.tmp"
     data = {
         "categories": st.session_state.categories,
@@ -43,23 +41,23 @@ def save_tasks_data():
         st.error(f"Error saving tasks: {e}")
 
 def calculate_urgency(due_date_str, time_needed_hours):
-    """Calculates urgency based on user's new ratio pressure formula."""
+    """Calculates real-time urgency ratio. Caps at 10 if time running out."""
     try:
         due_datetime = datetime.strptime(due_date_str, "%d-%m-%Y %H:%M")
         now = datetime.now()
         time_available = (due_datetime - now).total_seconds() / 3600
 
-        if time_available <= 0:
+        # If deadline passed or work needed exceeds/matches time window left
+        if time_available <= 0 or time_needed_hours >= time_available:
             return 10.0
 
-        # Formula: min(10, (time_needed / (time_available + 1)) * 10)
-        urgency_score = (time_needed_hours / (time_available + 1)) * 10
+        # Pure ratio-based pressure model
+        urgency_score = (time_needed_hours / time_available) * 10
         return round(min(10.0, max(0.0, urgency_score)), 2)
     except Exception:
         return 0.0
 
 def map_importance_label(value):
-    """Maps importance integers back to descriptive text tags."""
     if value >= 9: return "Critical"
     elif value >= 7: return "Very Important"
     elif value >= 5: return "Moderate"
@@ -74,18 +72,15 @@ st.set_page_config(page_title="Task Matrix Manager", page_icon="✅", layout="wi
 load_tasks_data()
 
 st.title("✅ Task Matrix Manager")
-st.write("An upgraded priority-driven task tracker featuring a risk-adjusted prioritization matrix.")
 
-# Recalculate dynamic scores and compile into a DataFrame
+# Live Data Processing
 if st.session_state.tasks:
     for t in st.session_state.tasks:
         t["urgency"] = calculate_urgency(t["due_date"], t.get("time required", 1.0))
-        # Final Score = (Urgency * 0.6) + (Importance * 0.4)
         t["final_score"] = round((t["urgency"] * 0.6) + (int(t.get("value", 5)) * 0.4), 2)
     
     raw_df = pd.DataFrame(st.session_state.tasks)
-    
-    # Tie-breaking logic: Sort by Final Score (descending), then Urgency (descending)
+    # Primary Sort: Final Score. Secondary Sort (Tie-breaker): Higher Urgency
     raw_df = raw_df.sort_values(by=["final_score", "urgency"], ascending=[False, False]).reset_index(drop=True)
 else:
     raw_df = pd.DataFrame()
@@ -102,7 +97,6 @@ if not raw_df.empty:
     col1, col2, col3 = st.columns(3)
     col1.metric("Total Tracked", total_tasks)
     col2.metric("Pending Tasks", pending_tasks, delta=f"-{completed_tasks} Completed", delta_color="inverse")
-    
     critical_count = len(raw_df[raw_df["priority"] == "Critical"]) if "priority" in raw_df else 0
     col3.metric("Highest Threat Tasks", critical_count)
 else:
@@ -111,51 +105,14 @@ else:
 st.markdown("---")
 
 # ==========================================
-# 4. INTERACTIVE SCATTER PLOT (MATRICES)
-# ==========================================
-if not raw_df.empty:
-    st.header("🎯 Priority Matrix Mapping")
-    
-    # Filter out completed tasks for cleaner scatter visualization if wanted, or show all
-    plot_df = raw_df[raw_df["completed"] == False] if "completed" in raw_df else raw_df
-    
-    if not plot_df.empty:
-        scatter_chart = (
-            alt.Chart(plot_df)
-            .mark_circle(size=120, opacity=0.85)
-            .encode(
-                x=alt.X("urgency:Q", title="Urgency Scale (Time Pressure)", scale=alt.Scale(domain=[0, 10])),
-                y=alt.Y("value:Q", title="Importance Scale (Value)", scale=alt.Scale(domain=[0, 10])),
-                color=alt.Color("category:N", title="Category"),
-                tooltip=[
-                    alt.Tooltip("name:N", title="Task"),
-                    alt.Tooltip("category:N", title="Category"),
-                    alt.Tooltip("due_date:N", title="Due Date"),
-                    alt.Tooltip("urgency:Q", title="Urgency"),
-                    alt.Tooltip("value:Q", title="Importance"),
-                    alt.Tooltip("final_score:Q", title="Final Priority Score")
-                ]
-            )
-            .properties(height=400, width=800)
-            .interactive()
-        )
-        st.altair_chart(scatter_chart, use_container_width=True)
-    else:
-        st.write("All tasks are complete! Nothing left to plot right now 🎉")
-    st.markdown("---")
-
-# ==========================================
-# 5. VIEW & LIVE EDIT TASKS (st.data_editor)
+# 4. VIEW & LIVE EDIT TASKS (Top/Middle Area)
 # ==========================================
 st.header("Active Workspace")
 
 if not raw_df.empty:
-    # Re-ordering for grid presentation
     cols_order = ["completed", "name", "category", "priority", "value", "due_date", "time required", "urgency", "final_score"]
     grid_df = raw_df[[c for c in cols_order if c in raw_df.columns]]
 
-    st.write("💡 Tasks auto-sort instantly! High final scores risk-profiled to the top. If scores tie, higher time pressure is ranked first.")
-    
     edited_df = st.data_editor(
         grid_df,
         use_container_width=True,
@@ -173,7 +130,6 @@ if not raw_df.empty:
         }
     )
     
-    # Process modifications done inside the data table grid
     if not edited_df.equals(grid_df):
         updated_list = edited_df.to_dict(orient="records")
         for item in updated_list:
@@ -182,7 +138,6 @@ if not raw_df.empty:
         save_tasks_data()
         st.rerun()
 
-    # Task Deletion tool
     with st.expander("🗑️ Danger Zone - Delete a Task"):
         task_names = [t["name"] for t in st.session_state.tasks]
         target_to_drop = st.selectbox("Select task to remove completely:", task_names)
@@ -191,11 +146,13 @@ if not raw_df.empty:
             save_tasks_data()
             st.success(f"Vaporized task: '{target_to_drop}'")
             st.rerun()
+else:
+    st.warning("No tasks stored currently.")
 
 st.markdown("---")
 
 # ==========================================
-# 6. STREAMLIT INPUT FORM (ADD TASK)
+# 5. STREAMLIT INPUT FORM (ADD TASK)
 # ==========================================
 st.header("➕ Add New Task")
 
@@ -248,3 +205,77 @@ if submitted_btn:
         save_tasks_data()
         st.toast(f"Task '{new_name}' logged successfully!", icon="🚀")
         st.rerun()
+
+st.markdown("---")
+
+# ==========================================
+# 6. GRAPH VISUALIZATIONS SECTION (Bottom)
+# ==========================================
+st.header("📊 Visualization Matrix & Breakdowns")
+
+if not raw_df.empty:
+    plot_df = raw_df[raw_df["completed"] == False].copy() if "completed" in raw_df else raw_df.copy()
+    
+    if not plot_df.empty:
+        # Side-by-side columns for charts
+        graph_col1, graph_col2 = st.columns([1, 1])
+        
+        with graph_col1:
+            st.subheader("🎯 Priority Matrix Mapping")
+            # Force absolute locked scale domain coordinates from [0 to 10]
+            scatter_chart = (
+                alt.Chart(plot_df)
+                .mark_circle(size=140, opacity=0.85)
+                .encode(
+                    x=alt.X("urgency:Q", title="Urgency (Time Pressure)", scale=alt.Scale(domain=[0, 10], clamp=True)),
+                    y=alt.Y("value:Q", title="Importance (Value)", scale=alt.Scale(domain=[0, 10], clamp=True)),
+                    color=alt.Color("category:N", title="Category"),
+                    tooltip=[
+                        alt.Tooltip("name:N", title="Task"),
+                        alt.Tooltip("category:N", title="Category"),
+                        alt.Tooltip("due_date:N", title="Due Date"),
+                        alt.Tooltip("urgency:Q", title="Urgency Score"),
+                        alt.Tooltip("value:Q", title="Importance Value"),
+                        alt.Tooltip("final_score:Q", title="Final Weighted Score")
+                    ]
+                )
+                .properties(height=350)
+            )
+            st.altair_chart(scatter_chart, use_container_width=True)
+            
+        with graph_col2:
+            st.subheader("🍰 Dynamic Proportion Analysis")
+            chart_mode = st.radio(
+                "Slice chart breakdown data by:",
+                options=["Task Categories", "Priority Tier Status"],
+                horizontal=True
+            )
+            
+            if chart_mode == "Task Categories":
+                pie_chart = (
+                    alt.Chart(plot_df)
+                    .mark_arc(innerRadius=40)
+                    .encode(
+                        theta=alt.Theta("count()", type="quantitative"),
+                        color=alt.Color("category:N", title="Category"),
+                        tooltip=["category:N", "count()"]
+                    )
+                    .properties(height=300)
+                )
+            else:
+                pie_chart = (
+                    alt.Chart(plot_df)
+                    .mark_arc(innerRadius=40)
+                    .encode(
+                        theta=alt.Theta("count()", type="quantitative"),
+                        color=alt.Color("priority:N", title="Tier Status", 
+                                        sort=["Critical", "Very Important", "Moderate", "Low", "Almost No Value"]),
+                        tooltip=["priority:N", "count()"]
+                    )
+                    .properties(height=300)
+                )
+            st.altair_chart(pie_chart, use_container_width=True)
+    else:
+        st.success("No active tasks remaining to map out! 🌟")
+else:
+    st.info("Charts will construct dynamically here once tasks are logged.")
