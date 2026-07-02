@@ -43,17 +43,22 @@ def save_tasks_data():
 def calculate_urgency(due_date_str, time_needed_hours):
     """Calculates real-time urgency ratio. Caps at 10 if time running out."""
     try:
+        # Parse the string deadline into a real Python datetime object
         due_datetime = datetime.strptime(due_date_str, "%d-%m-%Y %H:%M")
         now = datetime.now()
+        
+        # Calculate exactly how many hours are left from this exact second
         time_available = (due_datetime - now).total_seconds() / 3600
 
-        # If deadline passed or work needed exceeds/matches time window left
+        # CRITICAL FIX: If the deadline passed, or if the hours needed 
+        # to finish the task are greater than or equal to the time left:
         if time_available <= 0 or time_needed_hours >= time_available:
             return 10.0
 
-        # Pure ratio-based pressure model
+        # Otherwise, calculate the exact pressure ratio
         urgency_score = (time_needed_hours / time_available) * 10
         return round(min(10.0, max(0.0, urgency_score)), 2)
+        
     except Exception:
         return 0.0
 
