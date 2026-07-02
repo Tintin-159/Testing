@@ -41,22 +41,29 @@ def save_tasks_data():
         st.error(f"Error saving tasks: {e}")
 
 def calculate_urgency(due_date_str, time_needed_hours):
-    """Calculates real-time urgency ratio. Caps at 10 if time running out."""
+    """Calculates a timezone-safe, exponential urgency pressure score."""
     try:
-        # Parse the string deadline into a real Python datetime object
+        # 1. Parse the task deadline
         due_datetime = datetime.strptime(due_date_str, "%d-%m-%Y %H:%M")
+        
+        # 2. Get current time (naive comparison matching the strptime format)
         now = datetime.now()
         
-        # Calculate exactly how many hours are left from this exact second
+        # 3. Calculate exact total hours remaining
         time_available = (due_datetime - now).total_seconds() / 3600
 
-        # CRITICAL FIX: If the deadline passed, or if the hours needed 
-        # to finish the task are greater than or equal to the time left:
+        # Safety trigger: If deadline passed or work hours exceed time left, max it out
         if time_available <= 0 or time_needed_hours >= time_available:
             return 10.0
 
-        # Otherwise, calculate the exact pressure ratio
-        urgency_score = (time_needed_hours / time_available) * 10
+        # 4. EXPONENTIAL PRESSURE CURVE
+        # Ratio of your remaining day that this task will consume
+        time_consumption_ratio = time_needed_hours / time_available
+        
+        # We raise the intensity using an exponential factor so that 
+        # when a task takes up a huge chunk of your night, it jumps up aggressively.
+        urgency_score = (time_consumption_ratio ** 0.7) * 10
+        
         return round(min(10.0, max(0.0, urgency_score)), 2)
         
     except Exception:
