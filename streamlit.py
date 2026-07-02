@@ -47,11 +47,9 @@ def calculate_urgency(due_date_str, time_needed_hours):
         now = datetime.now()
         time_available = (due_datetime - now).total_seconds() / 3600
 
-        # Safety trigger: If deadline passed or work hours exceed time left, max it out
         if time_available <= 0 or time_needed_hours >= time_available:
             return 10.0
 
-        # Exponential pressure curve calculation
         time_consumption_ratio = time_needed_hours / time_available
         urgency_score = (time_consumption_ratio ** 0.7) * 10
         
@@ -65,6 +63,20 @@ def map_importance_label(value):
     elif value >= 5: return "Moderate"
     elif value >= 3: return "Low"
     else: return "Almost No Value"
+
+# Helper to check if a task is overdue
+def is_overdue(due_date_str):
+    try:
+        due_datetime = datetime.strptime(due_date_str, "%d-%m-%Y %H:%M")
+        return datetime.now() > due_datetime
+    except:
+        return False
+
+# Styler function for highlighting overdue tasks red
+def highlight_overdue(row):
+    if not row["completed"] and is_overdue(row["due_date"]):
+        return ["background-color: #ffcccc; color: #000000;"] * len(row)
+    return [""] * len(row)
 
 # ==========================================
 # 2. STREAMLIT APP CONFIG & SETUP
@@ -82,7 +94,6 @@ if st.session_state.tasks:
         t["final_score"] = round((t["urgency"] * 0.6) + (int(t.get("value", 5)) * 0.4), 2)
     
     raw_df = pd.DataFrame(st.session_state.tasks)
-    # Primary Sort: Final Score. Secondary Sort (Tie-breaker): Higher Urgency
     raw_df = raw_df.sort_values(by=["final_score", "urgency"], ascending=[False, False]).reset_index(drop=True)
 else:
     raw_df = pd.DataFrame()
@@ -107,38 +118,88 @@ else:
 st.markdown("---")
 
 # ==========================================
-# 4. VIEW & LIVE EDIT TASKS (Top/Middle Area)
+# 4. ACTIVE WORKSPACE (Separated Tabs with Highlight)
 # ==========================================
 st.header("Active Workspace")
 
 if not raw_df.empty:
     cols_order = ["completed", "name", "category", "priority", "value", "due_date", "time required", "urgency", "final_score"]
-    grid_df = raw_df[[c for c in cols_order if c in raw_df.columns]]
-
-    edited_df = st.data_editor(
-        grid_df,
-        use_container_width=True,
-        hide_index=True,
-        column_config={
-            "completed": st.column_config.CheckboxColumn("Done?", help="Mark complete"),
-            "name": st.column_config.TextColumn("Task Name", required=True),
-            "category": st.column_config.SelectboxColumn("Category", options=st.session_state.categories, required=True),
-            "priority": st.column_config.TextColumn("Tier Status", disabled=True),
-            "value": st.column_config.NumberColumn("Importance (1-10)", min_value=1, max_value=10, step=1),
-            "due_date": st.column_config.TextColumn("Due Date (DD-MM-YYYY HH:MM)"),
-            "time required": st.column_config.NumberColumn("Hours Required", min_value=0.1),
-            "urgency": st.column_config.NumberColumn("Urgency Score", disabled=True),
-            "final_score": st.column_config.NumberColumn("Final Combined Score", disabled=True)
-        }
-    )
     
-    if not edited_df.equals(grid_df):
-        updated_list = edited_df.to_dict(orient="records")
-        for item in updated_list:
-            item["priority"] = map_importance_label(int(item.get("value", 5)))
-        st.session_state.tasks = updated_list
-        save_tasks_data()
-        st.rerun()
+    # Split into separate views
+    pending_df = raw_df[raw_df["completed"] == False].reset_index(drop=True)
+    completed_df = raw_df[raw_df["completed"] == True].reset_index(drop=True)
+    
+    tab_pending, tab_completed = st.tabs(["⏳ Pending Tasks", "🎉 Completed Tasks"])
+    
+    with tab_pending:
+        if not pending_df.empty:
+            grid_pending = pending_df[[c for c in cols_order if c in pending_df.columns]]
+            
+            # Apply light red styling to rows where time has run out
+            styled_pending = grid_pending.style.apply(highlight_overdue, axis=1)
+            
+            edited_pending = st.data_editor(
+                styled_pending,
+                use_container_width=True,
+                hide_index=True,
+                key="pending_editor",
+                column_config={
+                    "completed": st.column_config.CheckboxColumn("Done?", help="Mark complete"),
+                    "name": st.column_config.TextColumn("Task Name", required=True),
+                    "category": st.column_config.SelectboxColumn("Category", options=st.session_state.categories, required=True),
+                    "priority": st.column_config.TextColumn("Tier Status", disabled=True),
+                    "value": st.column_config.NumberColumn("Importance (1-10)", min_value=1, max_value=10, step=1),
+                    "due_date": st.column_config.TextColumn("Due Date (DD-MM-YYYY HH:MM)"),
+                    "time required": st.column_config.NumberColumn("Hours Required", min_value=0.1),
+                    "urgency": st.column_config.NumberColumn("Urgency Score", disabled=True),
+                    "final_score": st.column_config.NumberColumn("Final Combined Score", disabled=True)
+                }
+            )
+            
+            # Check for grid changes
+            if not edited_pending.to_dataframe().equals(grid_pending):
+                updated_pending = edited_pending.to_dataframe().to_dict(orient="records")
+                for item in updated_pending:
+                    item["priority"] = map_importance_label(int(item.get("value", 5)))
+                
+                # Recombine with existing completed tasks to preserve everything
+                st.session_state.tasks = updated_pending + completed_df.to_dict(orient="records")
+                save_tasks_data()
+                st.rerun()
+        else:
+            st.success("All caught up! No pending tasks left. 🙌")
+            
+    with tab_completed:
+        if not completed_df.empty:
+            grid_completed = completed_df[[c for c in cols_order if c in completed_df.columns]]
+            edited_completed = st.data_editor(
+                grid_completed,
+                use_container_width=True,
+                hide_index=True,
+                key="completed_editor",
+                column_config={
+                    "completed": st.column_config.CheckboxColumn("Done?", help="Uncheck to reopen task"),
+                    "name": st.column_config.TextColumn("Task Name", required=True),
+                    "category": st.column_config.SelectboxColumn("Category", options=st.session_state.categories, required=True),
+                    "priority": st.column_config.TextColumn("Tier Status", disabled=True),
+                    "value": st.column_config.NumberColumn("Importance (1-10)", min_value=1, max_value=10, step=1),
+                    "due_date": st.column_config.TextColumn("Due Date (DD-MM-YYYY HH:MM)"),
+                    "time required": st.column_config.NumberColumn("Hours Required", min_value=0.1),
+                    "urgency": st.column_config.NumberColumn("Urgency Score", disabled=True),
+                    "final_score": st.column_config.NumberColumn("Final Combined Score", disabled=True)
+                }
+            )
+            
+            if not edited_completed.equals(grid_completed):
+                updated_completed = edited_completed.to_dict(orient="records")
+                for item in updated_completed:
+                    item["priority"] = map_importance_label(int(item.get("value", 5)))
+                
+                st.session_state.tasks = pending_df.to_dict(orient="records") + updated_completed
+                save_tasks_data()
+                st.rerun()
+        else:
+            st.info("Completed tasks will show up archived here!")
 
     with st.expander("🗑️ Danger Zone - Delete a Task"):
         task_names = [t["name"] for t in st.session_state.tasks]
@@ -148,8 +209,6 @@ if not raw_df.empty:
             save_tasks_data()
             st.success(f"Vaporized task: '{target_to_drop}'")
             st.rerun()
-else:
-    st.warning("No tasks stored currently.")
 
 st.markdown("---")
 
@@ -169,8 +228,8 @@ with st.form("new_task_form", clear_on_submit=True):
 
     with col_right:
         due_day = st.date_input("Target Due Date", value=datetime.now().date())
-        # Form matches exact current time instead of defaulting to 22:00
-        due_time = st.time_input("Target Action Time Deadline", value=datetime.now().time())
+        # REVERTED: Default time is safely locked back to 22:00
+        due_time = st.time_input("Target Action Time Deadline", value=datetime.replace(datetime.now(), hour=22, minute=0).time())
         time_qty = st.number_input("Time investment quantity", min_value=0.1, value=1.0, step=0.5)
         time_unit = st.selectbox("Duration unit metrics type", ["Minutes", "Hours", "Days", "Weeks"], index=1)
 
@@ -224,7 +283,6 @@ if not raw_df.empty:
         
         with graph_col1:
             st.subheader("🎯 Priority Matrix Mapping")
-            # Force absolute locked scale domains from 0 to 10 to disable automatic chart zooming
             scatter_chart = (
                 alt.Chart(plot_df)
                 .mark_circle(size=140, opacity=0.85)
