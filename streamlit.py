@@ -1,5 +1,6 @@
 import json
 import os
+import time
 from datetime import datetime, timedelta
 import pandas as pd
 import streamlit as st
@@ -83,12 +84,11 @@ load_tasks_data()
 
 st.title("✅ Task Matrix Manager")
 
-# NATIVE AUTOMATIC TIMEZONE CONFIGURATION
-# To avoid breaking third-party JS modules, we use a clean native dropdown that sets itself smoothly.
+# AUTOMATIC LOCAL TIME ZONE ACCURACY FIX
 st.sidebar.header("⚙️ System Adjustments")
 tz_choice = st.sidebar.selectbox(
     "Select Local Timezone Sync:",
-    options=["System Local Time (Auto)", "UTC / Server Time", "Custom Offset"],
+    options=["Automatic Browser/System Time", "UTC / Server Time", "Custom Offset"],
     index=0
 )
 
@@ -97,10 +97,8 @@ if tz_choice == "Custom Offset":
 elif tz_choice == "UTC / Server Time":
     tz_offset = 0.0
 else:
-    # Safely determines your host environment's relative clock offset
-    local_now = datetime.now()
-    utc_now = datetime.utcnow()
-    tz_offset = round((local_now - utc_now).total_seconds() / 3600.0)
+    # Uses system-level timezone flags to calculate real offset dynamically
+    tz_offset = -time.timezone / 3600.0 if time.daylight == 0 else -time.altzone / 3600.0
 
 # Live Data Processing with Imminent Deadline Boost
 if st.session_state.tasks:
@@ -117,14 +115,21 @@ if st.session_state.tasks:
             
         t["urgency"] = urgency
         t["final_score"] = round((urgency * 0.6) + (int(t.get("value", 5)) * 0.4) + time_boost, 2)
-        
-        # Track visually if it's expired without breaking layout code
         t["status_alert"] = "⚠️ OVERDUE" if is_overdue(t["due_date"], tz_offset) and not t["completed"] else "⏳ Active"
     
     raw_df = pd.DataFrame(st.session_state.tasks)
     raw_df = raw_df.sort_values(by=["final_score", "urgency"], ascending=[False, False]).reset_index(drop=True)
 else:
     raw_df = pd.DataFrame()
+
+# Dynamic row styling generator function (Restored Highlight Feature)
+def apply_row_styling(df, offset):
+    def highlight_urgent_and_overdue(row):
+        # Highlights red if overdue OR if urgency score is exceptionally high (e.g. >= 8.5)
+        if not row["completed"] and (is_overdue(row["due_date"], offset) or row["urgency"] >= 8.5):
+            return ["background-color: #b33939; color: #ffffff;"] * len(row)
+        return [""] * len(row)
+    return df.style.apply(highlight_urgent_and_overdue, axis=1)
 
 # ==========================================
 # 3. METRICS / STATISTICS SECTION
@@ -146,7 +151,7 @@ else:
 st.markdown("---")
 
 # ==========================================
-# 4. ACTIVE WORKSPACE (Clean native edits)
+# 4. ACTIVE WORKSPACE (Tabs + Restored Highlights)
 # ==========================================
 st.header("Active Workspace")
 
@@ -160,11 +165,11 @@ if not raw_df.empty:
     
     with tab_pending:
         if not pending_df.empty:
-            grid_pending = pending_df[[c for c in cols_order if c in pending_df.columns]]
+            grid_pending_raw = pending_df[[c for c in cols_order if c in pending_df.columns]]
+            styled_pending = apply_row_styling(grid_pending_raw, tz_offset)
             
-            # FIXED: Passing raw data instead of styling avoids the Pandas generic.py crash
             edited_pending = st.data_editor(
-                grid_pending,
+                styled_pending,
                 use_container_width=True,
                 hide_index=True,
                 key="pending_editor",
@@ -182,8 +187,14 @@ if not raw_df.empty:
                 }
             )
             
-            if not edited_pending.equals(grid_pending):
-                updated_pending = edited_pending.to_dict(orient="records")
+            # CRITICAL FIX: Extract underlying raw data matrix to compare changes without causing an AttributeError
+            if isinstance(edited_pending, pd.DataFrame):
+                check_df = edited_pending
+            else:
+                check_df = edited_pending.data if hasattr(edited_pending, "data") else grid_pending_raw
+
+            if not check_df.equals(grid_pending_raw):
+                updated_pending = check_df.to_dict(orient="records")
                 for item in updated_pending:
                     item["priority"] = map_importance_label(int(item.get("value", 5)))
                     item["completed"] = bool(item.get("completed", False))
