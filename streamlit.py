@@ -94,11 +94,29 @@ with st.sidebar:
         help="Adjust this slider until the calculated urgency matches your actual local clock."
     )
 
-# Live Data Processing
+# Live Data Processing with Imminent Deadline Boost
 if st.session_state.tasks:
     for t in st.session_state.tasks:
-        t["urgency"] = calculate_urgency(t["due_date"], t.get("time required", 1.0), tz_offset)
-        t["final_score"] = round((t["urgency"] * 0.6) + (int(t.get("value", 5)) * 0.4), 2)
+        # 1. Calculate base urgency
+        urgency = calculate_urgency(t["due_date"], t.get("time required", 1.0), tz_offset)
+        
+        # 2. Add an automatic emergency boost if the task is due very soon (e.g., within 4 hours)
+        try:
+            due_dt = datetime.strptime(t["due_date"], "%d-%m-%Y %H:%M")
+            local_now = datetime.now() + timedelta(hours=tz_offset)
+            hours_left = (due_dt - local_now).total_seconds() / 3600
+            
+            # If it's due in less than 4 hours and not overdue yet, give it a heavy priority push
+            if 0 < hours_left <= 4.0:
+                time_boost = 5.0
+            else:
+                time_boost = 0.0
+        except:
+            time_boost = 0.0
+            
+        t["urgency"] = urgency
+        # Combined calculation with the custom proximity boost injected
+        t["final_score"] = round((urgency * 0.6) + (int(t.get("value", 5)) * 0.4) + time_boost, 2)
     
     raw_df = pd.DataFrame(st.session_state.tasks)
     raw_df = raw_df.sort_values(by=["final_score", "urgency"], ascending=[False, False]).reset_index(drop=True)
