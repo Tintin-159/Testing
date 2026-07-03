@@ -82,6 +82,22 @@ def is_overdue(due_date_str, tz_offset):
 st.set_page_config(page_title="Task Matrix Manager", page_icon="✅", layout="wide")
 load_tasks_data()
 
+# INJECT CUSTOM CSS TO ENABLE FULL-WIDTH ROW SELECTION & HIGHLIGHT STRETCHING
+st.markdown(
+    """
+    <style>
+    /* Forces grid rows to stretch flush against the edge container layout */
+    div[data-testid="stDataEditor"] div {
+        width: 100% !important;
+    }
+    .stDataFrame div [role="row"] {
+        width: 100% !important;
+    }
+    </style>
+    """,
+    unsafe_allow_html=True
+)
+
 st.title("✅ Task Matrix Manager")
 
 # AUTOMATIC LOCAL TIME ZONE ACCURACY FIX
@@ -97,7 +113,6 @@ if tz_choice == "Custom Offset":
 elif tz_choice == "UTC / Server Time":
     tz_offset = 0.0
 else:
-    # Uses system-level timezone flags to calculate real offset dynamically
     tz_offset = -time.timezone / 3600.0 if time.daylight == 0 else -time.altzone / 3600.0
 
 # Live Data Processing with Imminent Deadline Boost
@@ -122,12 +137,11 @@ if st.session_state.tasks:
 else:
     raw_df = pd.DataFrame()
 
-# Dynamic row styling generator function (Restored Highlight Feature)
+# Dynamic row styling generator function (Stretches text alignment colors)
 def apply_row_styling(df, offset):
     def highlight_urgent_and_overdue(row):
-        # Highlights red if overdue OR if urgency score is exceptionally high (e.g. >= 8.5)
         if not row["completed"] and (is_overdue(row["due_date"], offset) or row["urgency"] >= 8.5):
-            return ["background-color: #b33939; color: #ffffff;"] * len(row)
+            return ["background-color: #b33939; color: #ffffff; display: table-cell;"] * len(row)
         return [""] * len(row)
     return df.style.apply(highlight_urgent_and_overdue, axis=1)
 
@@ -151,7 +165,7 @@ else:
 st.markdown("---")
 
 # ==========================================
-# 4. ACTIVE WORKSPACE (Tabs + Restored Highlights)
+# 4. ACTIVE WORKSPACE (Tabs + Edge-to-Edge Highlights)
 # ==========================================
 st.header("Active Workspace")
 
@@ -187,7 +201,6 @@ if not raw_df.empty:
                 }
             )
             
-            # CRITICAL FIX: Extract underlying raw data matrix to compare changes without causing an AttributeError
             if isinstance(edited_pending, pd.DataFrame):
                 check_df = edited_pending
             else:
