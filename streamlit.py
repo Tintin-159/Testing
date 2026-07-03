@@ -12,6 +12,7 @@ import altair as alt
 DEFAULT_CATEGORIES = ["School", "Work", "Personal", "Study"]
 
 def load_tasks_data():
+    """Loads tasks and categories permanently from tasks.json into session state."""
     if "tasks" not in st.session_state or "categories" not in st.session_state:
         try:
             with open("tasks.json", "r") as file:
@@ -27,6 +28,7 @@ def load_tasks_data():
             st.session_state.categories = DEFAULT_CATEGORIES
 
 def save_tasks_data():
+    """Saves current state back to the JSON file safely and permanently."""
     temp_file = "tasks.json.tmp"
     data = {
         "categories": st.session_state.categories,
@@ -152,11 +154,17 @@ if not raw_df.empty:
                 }
             )
             
-            # FIXED: Removed the invalid .to_dataframe() call
-            if not edited_pending.equals(grid_pending):
-                updated_pending = edited_pending.to_dict(orient="records")
+            # Extract updated data avoiding style conversion corruption
+            if isinstance(edited_pending, pd.DataFrame):
+                check_df = edited_pending
+            else:
+                check_df = edited_pending.to_dataframe() if hasattr(edited_pending, "to_dataframe") else grid_pending
+
+            if not check_df.equals(grid_pending):
+                updated_pending = check_df.to_dict(orient="records")
                 for item in updated_pending:
                     item["priority"] = map_importance_label(int(item.get("value", 5)))
+                    item["completed"] = bool(item.get("completed", False))
                 
                 st.session_state.tasks = updated_pending + completed_df.to_dict(orient="records")
                 save_tasks_data()
@@ -180,8 +188,8 @@ if not raw_df.empty:
                     "value": st.column_config.NumberColumn("Importance (1-10)", min_value=1, max_value=10, step=1),
                     "due_date": st.column_config.TextColumn("Due Date (DD-MM-YYYY HH:MM)"),
                     "time required": st.column_config.NumberColumn("Hours Required", min_value=0.1),
-                    "urgency": st.column_config.NumberColumn("Urgency Score", disabled=True),
-                    "final_score": st.column_config.NumberColumn("Final Combined Score", disabled=True)
+                    "urgency": st.column_config.NumberColumn("Urgency Score", disabled=True, format="%.2f"),
+                    "final_score": st.column_config.NumberColumn("Final Combined Score", disabled=True, format="%.2f")
                 }
             )
             
@@ -189,6 +197,7 @@ if not raw_df.empty:
                 updated_completed = edited_completed.to_dict(orient="records")
                 for item in updated_completed:
                     item["priority"] = map_importance_label(int(item.get("value", 5)))
+                    item["completed"] = bool(item.get("completed", True))
                 
                 st.session_state.tasks = pending_df.to_dict(orient="records") + updated_completed
                 save_tasks_data()
@@ -224,7 +233,6 @@ with st.form("new_task_form", clear_on_submit=True):
 
     with col_right:
         due_day = st.date_input("Target Due Date", value=datetime.now().date())
-        # FIXED: Explicitly defaults back to 22:00
         due_time = st.time_input("Target Action Time Deadline", value=datetime.replace(datetime.now(), hour=22, minute=0).time())
         time_qty = st.number_input("Time investment quantity", min_value=0.1, value=1.0, step=0.5)
         time_unit = st.selectbox("Duration unit metrics type", ["Minutes", "Hours", "Days", "Weeks"], index=1)
