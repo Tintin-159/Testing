@@ -4,6 +4,7 @@ from datetime import datetime, timedelta
 import pandas as pd
 import streamlit as st
 import altair as alt
+from streamlit_javascript import st_javascript
 
 # ==========================================
 # 1. CORE BACKEND FUNCTIONS & DATA PERSISTENCE
@@ -77,7 +78,7 @@ def is_overdue(due_date_str, tz_offset):
         return False
 
 # ==========================================
-# 2. STREAMLIT APP CONFIG & SETUP
+# 2. STREAMLIT APP CONFIG & AUTOMATIC TIMEZONE DETECTION
 # ==========================================
 
 st.set_page_config(page_title="Task Matrix Manager", page_icon="✅", layout="wide")
@@ -85,28 +86,33 @@ load_tasks_data()
 
 st.title("✅ Task Matrix Manager")
 
-# Sidebar configurations for Time Zone offsets
-with st.sidebar:
-    st.header("⚙️ Settings")
-    tz_offset = st.slider(
-        "Your Time Zone Offset (Hours from Server Time):",
-        min_value=-12.0, max_value=14.0, value=0.0, step=0.5,
-        help="Adjust this slider until the calculated urgency matches your actual local clock."
-    )
+# AUTOMATIC TIMEZONE DETECTION VIA JAVASCRIPT
+# JavaScript returns the timezone offset in minutes relative to UTC, inverted (e.g., GMT+2 is -120)
+js_timezone_offset_minutes = st_javascript("new Date().getTimezoneOffset();")
+
+if js_timezone_offset_minutes is not None:
+    # Convert minutes to hours and flip the sign to match standard UTC offsets
+    user_utc_offset = -float(js_timezone_offset_minutes) / 60.0
+    
+    # Calculate the server's current UTC offset to find the relative difference
+    server_utc_offset = -float(datetime.now().astimezone().utcoffset().total_seconds()) / 3600.0
+    tz_offset = user_utc_offset - server_utc_offset
+else:
+    # Safe fallback to 0 if the browser script hasn't completed loading yet
+    tz_offset = 0.0
 
 # Live Data Processing with Imminent Deadline Boost
 if st.session_state.tasks:
     for t in st.session_state.tasks:
-        # 1. Calculate base urgency
+        # 1. Calculate base urgency using the automatic offset
         urgency = calculate_urgency(t["due_date"], t.get("time required", 1.0), tz_offset)
         
-        # 2. Add an automatic emergency boost if the task is due very soon (e.g., within 4 hours)
+        # 2. Add an automatic emergency boost if the task is due very soon (within 4 hours)
         try:
             due_dt = datetime.strptime(t["due_date"], "%d-%m-%Y %H:%M")
             local_now = datetime.now() + timedelta(hours=tz_offset)
             hours_left = (due_dt - local_now).total_seconds() / 3600
             
-            # If it's due in less than 4 hours and not overdue yet, give it a heavy priority push
             if 0 < hours_left <= 4.0:
                 time_boost = 5.0
             else:
@@ -115,7 +121,6 @@ if st.session_state.tasks:
             time_boost = 0.0
             
         t["urgency"] = urgency
-        # Combined calculation with the custom proximity boost injected
         t["final_score"] = round((urgency * 0.6) + (int(t.get("value", 5)) * 0.4) + time_boost, 2)
     
     raw_df = pd.DataFrame(st.session_state.tasks)
