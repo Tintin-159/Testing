@@ -154,7 +154,6 @@ if not raw_df.empty:
                 }
             )
             
-            # Extract updated data avoiding style conversion corruption
             if isinstance(edited_pending, pd.DataFrame):
                 check_df = edited_pending
             else:
@@ -233,7 +232,10 @@ with st.form("new_task_form", clear_on_submit=True):
 
     with col_right:
         due_day = st.date_input("Target Due Date", value=datetime.now().date())
-        due_time = st.time_input("Target Action Time Deadline", value=datetime.replace(datetime.now(), hour=22, minute=0).time())
+        
+        # IMPROVEMENT: Removed 22:00 override. Defaults dynamically to your exact current time.
+        due_time = st.time_input("Target Action Time Deadline", value=datetime.now().time())
+        
         time_qty = st.number_input("Time investment quantity", min_value=0.1, value=1.0, step=0.5)
         time_unit = st.selectbox("Duration unit metrics type", ["Minutes", "Hours", "Days", "Weeks"], index=1)
 
