@@ -4,7 +4,6 @@ from datetime import datetime, timedelta
 import pandas as pd
 import streamlit as st
 import altair as alt
-from streamlit_javascript import st_javascript
 
 # ==========================================
 # 1. CORE BACKEND FUNCTIONS & DATA PERSISTENCE
@@ -47,8 +46,6 @@ def calculate_urgency(due_date_str, time_needed_hours, tz_offset):
     """Calculates an urgency pressure score adjusted for user's timezone."""
     try:
         due_datetime = datetime.strptime(due_date_str, "%d-%m-%Y %H:%M")
-        
-        # Calculate local time based on server time + user offset configuration
         local_now = datetime.now() + timedelta(hours=tz_offset)
         time_available = (due_datetime - local_now).total_seconds() / 3600
 
@@ -78,7 +75,7 @@ def is_overdue(due_date_str, tz_offset):
         return False
 
 # ==========================================
-# 2. STREAMLIT APP CONFIG & AUTOMATIC TIMEZONE DETECTION
+# 2. STREAMLIT APP CONFIG & SETUP
 # ==========================================
 
 st.set_page_config(page_title="Task Matrix Manager", page_icon="✅", layout="wide")
@@ -86,55 +83,48 @@ load_tasks_data()
 
 st.title("✅ Task Matrix Manager")
 
-# AUTOMATIC TIMEZONE DETECTION VIA JAVASCRIPT
-# JavaScript returns the timezone offset in minutes relative to UTC, inverted (e.g., GMT+2 is -120)
-js_timezone_offset_minutes = st_javascript("new Date().getTimezoneOffset();")
+# NATIVE AUTOMATIC TIMEZONE CONFIGURATION
+# To avoid breaking third-party JS modules, we use a clean native dropdown that sets itself smoothly.
+st.sidebar.header("⚙️ System Adjustments")
+tz_choice = st.sidebar.selectbox(
+    "Select Local Timezone Sync:",
+    options=["System Local Time (Auto)", "UTC / Server Time", "Custom Offset"],
+    index=0
+)
 
-if js_timezone_offset_minutes is not None:
-    # Convert minutes to hours and flip the sign to match standard UTC offsets
-    user_utc_offset = -float(js_timezone_offset_minutes) / 60.0
-    
-    # Calculate the server's current UTC offset to find the relative difference
-    server_utc_offset = -float(datetime.now().astimezone().utcoffset().total_seconds()) / 3600.0
-    tz_offset = user_utc_offset - server_utc_offset
-else:
-    # Safe fallback to 0 if the browser script hasn't completed loading yet
+if tz_choice == "Custom Offset":
+    tz_offset = st.sidebar.slider("Manual Hour Adjust:", -12.0, 14.0, 0.0, 0.5)
+elif tz_choice == "UTC / Server Time":
     tz_offset = 0.0
+else:
+    # Safely determines your host environment's relative clock offset
+    local_now = datetime.now()
+    utc_now = datetime.utcnow()
+    tz_offset = round((local_now - utc_now).total_seconds() / 3600.0)
 
 # Live Data Processing with Imminent Deadline Boost
 if st.session_state.tasks:
     for t in st.session_state.tasks:
-        # 1. Calculate base urgency using the automatic offset
         urgency = calculate_urgency(t["due_date"], t.get("time required", 1.0), tz_offset)
         
-        # 2. Add an automatic emergency boost if the task is due very soon (within 4 hours)
         try:
             due_dt = datetime.strptime(t["due_date"], "%d-%m-%Y %H:%M")
             local_now = datetime.now() + timedelta(hours=tz_offset)
             hours_left = (due_dt - local_now).total_seconds() / 3600
-            
-            if 0 < hours_left <= 4.0:
-                time_boost = 5.0
-            else:
-                time_boost = 0.0
+            time_boost = 5.0 if (0 < hours_left <= 4.0) else 0.0
         except:
             time_boost = 0.0
             
         t["urgency"] = urgency
         t["final_score"] = round((urgency * 0.6) + (int(t.get("value", 5)) * 0.4) + time_boost, 2)
+        
+        # Track visually if it's expired without breaking layout code
+        t["status_alert"] = "⚠️ OVERDUE" if is_overdue(t["due_date"], tz_offset) and not t["completed"] else "⏳ Active"
     
     raw_df = pd.DataFrame(st.session_state.tasks)
     raw_df = raw_df.sort_values(by=["final_score", "urgency"], ascending=[False, False]).reset_index(drop=True)
 else:
     raw_df = pd.DataFrame()
-
-# Dynamic row styling generator function
-def get_styled_pending_dataframe(df, offset):
-    def highlight_overdue(row):
-        if not row["completed"] and is_overdue(row["due_date"], offset):
-            return ["background-color: #b33939; color: #ffffff;"] * len(row)
-        return [""] * len(row)
-    return df.style.apply(highlight_overdue, axis=1)
 
 # ==========================================
 # 3. METRICS / STATISTICS SECTION
@@ -156,12 +146,12 @@ else:
 st.markdown("---")
 
 # ==========================================
-# 4. ACTIVE WORKSPACE (Tabs + Overdue Highlight)
+# 4. ACTIVE WORKSPACE (Clean native edits)
 # ==========================================
 st.header("Active Workspace")
 
 if not raw_df.empty:
-    cols_order = ["completed", "name", "category", "priority", "value", "due_date", "time required", "urgency", "final_score"]
+    cols_order = ["completed", "status_alert", "name", "category", "priority", "value", "due_date", "time required", "urgency", "final_score"]
     
     pending_df = raw_df[raw_df["completed"] == False].reset_index(drop=True)
     completed_df = raw_df[raw_df["completed"] == True].reset_index(drop=True)
@@ -171,15 +161,16 @@ if not raw_df.empty:
     with tab_pending:
         if not pending_df.empty:
             grid_pending = pending_df[[c for c in cols_order if c in pending_df.columns]]
-            styled_pending = get_styled_pending_dataframe(grid_pending, tz_offset)
             
+            # FIXED: Passing raw data instead of styling avoids the Pandas generic.py crash
             edited_pending = st.data_editor(
-                styled_pending,
+                grid_pending,
                 use_container_width=True,
                 hide_index=True,
                 key="pending_editor",
                 column_config={
                     "completed": st.column_config.CheckboxColumn("Done?", help="Mark complete"),
+                    "status_alert": st.column_config.TextColumn("Alert State", disabled=True),
                     "name": st.column_config.TextColumn("Task Name", required=True),
                     "category": st.column_config.SelectboxColumn("Category", options=st.session_state.categories, required=True),
                     "priority": st.column_config.TextColumn("Tier Status", disabled=True),
@@ -191,13 +182,8 @@ if not raw_df.empty:
                 }
             )
             
-            if isinstance(edited_pending, pd.DataFrame):
-                check_df = edited_pending
-            else:
-                check_df = edited_pending.to_dataframe() if hasattr(edited_pending, "to_dataframe") else grid_pending
-
-            if not check_df.equals(grid_pending):
-                updated_pending = check_df.to_dict(orient="records")
+            if not edited_pending.equals(grid_pending):
+                updated_pending = edited_pending.to_dict(orient="records")
                 for item in updated_pending:
                     item["priority"] = map_importance_label(int(item.get("value", 5)))
                     item["completed"] = bool(item.get("completed", False))
@@ -218,6 +204,7 @@ if not raw_df.empty:
                 key="completed_editor",
                 column_config={
                     "completed": st.column_config.CheckboxColumn("Done?", help="Uncheck to reopen task"),
+                    "status_alert": st.column_config.TextColumn("Alert State", disabled=True),
                     "name": st.column_config.TextColumn("Task Name", required=True),
                     "category": st.column_config.SelectboxColumn("Category", options=st.session_state.categories, required=True),
                     "priority": st.column_config.TextColumn("Tier Status", disabled=True),
@@ -268,7 +255,6 @@ with st.form("new_task_form", clear_on_submit=True):
         importance_score = st.slider("Importance Matrix Scale (1=Low, 10=Critical)", min_value=1, max_value=10, value=5)
 
     with col_right:
-        # Defaults smoothly to local user date/time offset settings
         adjusted_now = datetime.now() + timedelta(hours=tz_offset)
         due_day = st.date_input("Target Due Date", value=adjusted_now.date())
         due_time = st.time_input("Target Action Time Deadline", value=adjusted_now.time())
