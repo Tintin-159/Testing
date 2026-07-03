@@ -1,6 +1,6 @@
 import json
 import os
-from datetime import datetime
+from datetime import datetime, timedelta
 import pandas as pd
 import streamlit as st
 import altair as alt
@@ -42,12 +42,14 @@ def save_tasks_data():
     except Exception as e:
         st.error(f"Error saving tasks: {e}")
 
-def calculate_urgency(due_date_str, time_needed_hours):
-    """Calculates a timezone-safe, exponential urgency pressure score."""
+def calculate_urgency(due_date_str, time_needed_hours, tz_offset):
+    """Calculates an urgency pressure score adjusted for user's timezone."""
     try:
         due_datetime = datetime.strptime(due_date_str, "%d-%m-%Y %H:%M")
-        now = datetime.now()
-        time_available = (due_datetime - now).total_seconds() / 3600
+        
+        # Calculate local time based on server time + user offset configuration
+        local_now = datetime.now() + timedelta(hours=tz_offset)
+        time_available = (due_datetime - local_now).total_seconds() / 3600
 
         if time_available <= 0 or time_needed_hours >= time_available:
             return 10.0
@@ -66,18 +68,13 @@ def map_importance_label(value):
     elif value >= 3: return "Low"
     else: return "Almost No Value"
 
-def is_overdue(due_date_str):
+def is_overdue(due_date_str, tz_offset):
     try:
         due_datetime = datetime.strptime(due_date_str, "%d-%m-%Y %H:%M")
-        return datetime.now() > due_datetime
+        local_now = datetime.now() + timedelta(hours=tz_offset)
+        return local_now > due_datetime
     except:
         return False
-
-def highlight_overdue(row):
-    """Applies a soft red background highlight to items that have passed their deadline."""
-    if not row["completed"] and is_overdue(row["due_date"]):
-        return ["background-color: #b33939; color: #ffffff;"] * len(row)
-    return [""] * len(row)
 
 # ==========================================
 # 2. STREAMLIT APP CONFIG & SETUP
@@ -88,16 +85,33 @@ load_tasks_data()
 
 st.title("✅ Task Matrix Manager")
 
+# Sidebar configurations for Time Zone offsets
+with st.sidebar:
+    st.header("⚙️ Settings")
+    tz_offset = st.slider(
+        "Your Time Zone Offset (Hours from Server Time):",
+        min_value=-12.0, max_value=14.0, value=0.0, step=0.5,
+        help="Adjust this slider until the calculated urgency matches your actual local clock."
+    )
+
 # Live Data Processing
 if st.session_state.tasks:
     for t in st.session_state.tasks:
-        t["urgency"] = calculate_urgency(t["due_date"], t.get("time required", 1.0))
+        t["urgency"] = calculate_urgency(t["due_date"], t.get("time required", 1.0), tz_offset)
         t["final_score"] = round((t["urgency"] * 0.6) + (int(t.get("value", 5)) * 0.4), 2)
     
     raw_df = pd.DataFrame(st.session_state.tasks)
     raw_df = raw_df.sort_values(by=["final_score", "urgency"], ascending=[False, False]).reset_index(drop=True)
 else:
     raw_df = pd.DataFrame()
+
+# Dynamic row styling generator function
+def get_styled_pending_dataframe(df, offset):
+    def highlight_overdue(row):
+        if not row["completed"] and is_overdue(row["due_date"], offset):
+            return ["background-color: #b33939; color: #ffffff;"] * len(row)
+        return [""] * len(row)
+    return df.style.apply(highlight_overdue, axis=1)
 
 # ==========================================
 # 3. METRICS / STATISTICS SECTION
@@ -134,7 +148,7 @@ if not raw_df.empty:
     with tab_pending:
         if not pending_df.empty:
             grid_pending = pending_df[[c for c in cols_order if c in pending_df.columns]]
-            styled_pending = grid_pending.style.apply(highlight_overdue, axis=1)
+            styled_pending = get_styled_pending_dataframe(grid_pending, tz_offset)
             
             edited_pending = st.data_editor(
                 styled_pending,
@@ -231,10 +245,10 @@ with st.form("new_task_form", clear_on_submit=True):
         importance_score = st.slider("Importance Matrix Scale (1=Low, 10=Critical)", min_value=1, max_value=10, value=5)
 
     with col_right:
-        due_day = st.date_input("Target Due Date", value=datetime.now().date())
-        
-        # IMPROVEMENT: Removed 22:00 override. Defaults dynamically to your exact current time.
-        due_time = st.time_input("Target Action Time Deadline", value=datetime.now().time())
+        # Defaults smoothly to local user date/time offset settings
+        adjusted_now = datetime.now() + timedelta(hours=tz_offset)
+        due_day = st.date_input("Target Due Date", value=adjusted_now.date())
+        due_time = st.time_input("Target Action Time Deadline", value=adjusted_now.time())
         
         time_qty = st.number_input("Time investment quantity", min_value=0.1, value=1.0, step=0.5)
         time_unit = st.selectbox("Duration unit metrics type", ["Minutes", "Hours", "Days", "Weeks"], index=1)
